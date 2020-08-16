@@ -1,0 +1,195 @@
+---
+title: "Data Analytics"
+author: "Gokce Muge Cil & Can Aykul"
+date: "27 Temmuz 2018"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+
+```{r, echo=FALSE}
+
+```
+
+
+```{r setup, include=FALSE}
+library(maps)
+library(tidytext)
+require(pacman)
+p_load(tidyverse, stringr, lubridate, ggplot2)
+data <- read.csv("winemag-data_first150k.csv", stringsAsFactors = FALSE)
+
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Motivation / Idea / Question ##
+In this project, we wanted to investigate wines. Our motivation is to understand insights of wine. To do this, we do not ask just one question and try to achieve an answer but ask multiple questions such as:  
+ * What does this dataset shows us in general?  
+ * Can we  add new features to dataset? If so, how? Does it works?  
+ * Can we improve the existing features by filling the NA values in the data with linear regression? How to interpret the prediction results?  
+ * Lastly, how to cluster wines?  
+
+## Approach
+Our approach is as follows:  
+1. We will introduce the data and show some plots about it to get the first insight.  
+2. We will try to add a new feature by doing naive Natural Language Processing and a more complicated one. Then we will test whether this new feature makes sense or not.  
+3. We will fill the NA values after finding a nice correlation between existing features and the new feature   that we add. After finding a nice correlation tuple then we will use this with inside linear regression.
+4. We will cluster wines after improving dataset.  
+
+
+## Wine Reviews Dataset
+URL: https://www.kaggle.com/zynicide/wine-reviews, file name: "winemag-data_first150k.csv"
+In this assignment, we used Wine Reviews dataset from Kaggle. It has 150 thousand reviews and their properties as below.
+
+```{r data, echo=FALSE }
+str(data)
+```
+
+#### Price & Country relationship investigation
+Now lets start with plotting average wine prices for each country in the world map.
+```{r map,world_map, echo=FALSE}
+map<-map_data("world")
+#get to know data
+world_map <- data %>% group_by(country) %>% summarize(avg_price=mean(price, na.rm = TRUE)) %>% 
+  na.omit() %>% filter(country != "US-France" & country != "" )
+ggplot(world_map, aes(fill=avg_price)) + 
+  geom_map(aes(map_id=country), map=map) + 
+  xlim(-150,180) + ylim(-60, 80) +
+  scale_fill_gradient(low='white', high='red')
+```
+    
+  Here we can see that France and Slovenia has the most expensive wine among all tested wine reviews. Also we see world partly that is because some of the countries do not have a wine that has been reviewed, and the name in the dataset does not fit with the visualizations (US is not accepted but United States etc.).  
+
+##### Another average price per country with geom_col:
+```{r price-country, echo=FALSE}
+data_grouped_by_country <- data %>% 
+  group_by(country) %>% 
+  summarize( n=n(), avg_price=mean(price, na.rm=TRUE), avg_point=mean(points, na.rm = TRUE)) %>%
+  arrange(-avg_price)
+ggplot(data_grouped_by_country, aes(x = country, y = avg_price, fill = country)) +
+  geom_col(position="dodge") +
+  coord_flip()
+```
+
+#### Points & Country Relationship  
+We now start to investigate points & country relationship in the dataset  
+
+##### Density graph for points - country each country separatetely  
+```{r point-country, echo=FALSE}
+data %>%
+  ggplot(aes(x = points, fill = country)) +
+  geom_density() +
+  scale_y_sqrt() +
+  facet_wrap(~ country) +
+  theme_minimal()
+```
+  
+#### Now lets try to understand whether there is a dependency between price & points.  
+```{r point-price, echo=FALSE}
+points_multi = cut(data$points, seq(80,100,5))
+ggplot(data, aes(x = points_multi, y = price)) + geom_boxplot() + scale_y_log10()
+```  
+    
+  As we can see, low points range have less mean value of price. When the point range goes up to 95-100 points there we can claim that mean price of a wine is 100 and also there is more variation of prices in the upper side of mean which means, a wine which has 95-100 points can be really expensive.  
+  
+### Improving the dataset by adding a feature with NLP  
+##### Naive approach  
+Our second part is adding a new feature to the dataset. We thought that we can use "description" column and make a naive hypothesis to find bad comments as "If a comment has word 'bad' in it, then it is likely that wine has a lower point." Now lets look at what we achieve after we implemented it.  
+```{r bad_comments, echo=FALSE}
+data <- data %>% mutate(bad_comment = str_detect(description, fixed("bad",ignore_case = TRUE))) 
+data %>% ggplot(aes(x=bad_comment, y=points)) + geom_violin()
+```
+    
+  Here FALSE violin is the ones without the bad comments or more specifically "bad_comments = FALSE" so is a good_comment :). Whereas TRUE violin is the bad comments (bad_comments=TRUE). Here we can clearly see that bad_comments=TRUE violin has a belly in the lower points while its head sharpens and decreases towards the upper points (max to point 95).  
+
+##### Complicated approach  
+Now lets do a complicated sentiment analysis on "description" feature. This time we will create a new feature by reading "description" feature and will appoint a "sentiment" score to the review.  
+```{r sentiment, echo=FALSE}
+tidy_data <- data %>% 
+  unnest_tokens(word, description)
+#eleminates redundant stop words 
+data("stop_words")
+tidy_data <- tidy_data %>%
+  anti_join(stop_words)
+
+# labels each word in the description as positive/negative. 
+# counts the total positive&negative words in the description
+# mutates sentiment, positive and negative counts
+sentiments <- tidy_data %>%
+  inner_join(get_sentiments("bing"), by = "word") %>% 
+  count(X, sentiment)  %>% 
+  spread(sentiment, n, fill = 0) %>%  
+  mutate(positive, negative, sentiment = positive - negative)
+
+# joins sentiment attributes to the original data
+joined_data <- data %>% inner_join(sentiments, by = "X")
+
+# shows average points for each sentiment points[-10,12]
+joined_data  %>% group_by(sentiment)  %>% summarize(avg_point = mean(points)) %>%  head(3)
+joined_data  %>% group_by(sentiment)  %>% summarize(avg_point = mean(points)) %>%  tail(3)
+sentiments_multi<-cut(joined_data$sentiment, seq(-10,12,1))
+joined_data %>% ggplot(aes(x=sentiments_multi, y=points)) + geom_boxplot()
+data <- joined_data
+```
+    
+  Above we can clearly see that whenever sentiment point increase, point of the review also increases! The logic behind is simple actually: Whenever a positive word is read from the description of the review, then that review gains 1 point for positive and whenever a negative word is read then 1 point for negative. At the end we just create a new feature as "sentiment" via the following equation: positive - negative.  
+
+
+### Filling NA values in "price" column with linear regression and added new features
+##### First find a good correlation with price and other features
+
+  First correlation result is: price ~ point  
+Second correlation result is: price ~ point + sentiment  
+Third correlation result is: price ~ point + bad_comment + sentiment 
+Fourt correalatiın result is: price ~ point + bad_comment + negative + positive
+
+```{r correlation, echo=FALSE}
+cor(data$points, data$price, use="complete.obs")
+
+cor(data$sentiment + data$points, data$price, use="complete.obs")
+cor(data$bad_comment + data$points + data$sentiment, data$price, use="complete.obs")
+cor(data$bad_comment + data$points + data$negative + data$positive, data$price, use="complete.obs")
+```
+  First choice is the best. But we will still use fourth selection: price ~ point + positive + negative + bad_comment to build our model for the linear regression.  
+
+##### Filling the missing values  
+```{r linearregression, echo=FALSE}
+model <- lm(log(price+1) ~ points+bad_comment+sentiment, data = data) 
+log_predicted <- exp(predict(model,newdata = data))-1
+data$price[is.na(data$price)] <- log_predicted
+model
+```
+  Now we have filled our NA values. Note that we want to predict a positive value. Therefore linear regression might not be the best model however we have found a trick and used "log" in the formula to avoid negative predictions. When we actually want to fetch the prediction we then "exponentiate" the "logged" result  
+
+
+### Now that we have improved our dataset, we can move on to clustering wines.
+####Clustering with dendogram  
+```{r dendogram, echo=FALSE}
+avg_pnt_country <- data %>% group_by(country) %>% summarize(mean_points = mean(points, na.rm = TRUE))
+rownames(avg_pnt_country) <- avg_pnt_country$country
+hclust(dist(avg_pnt_country)) %>% plot()
+```
+  
+Above we can see which countries are similar according to their wine review points.
+
+####Clustering with k-means
+```{r k-means, echo=FALSE}
+performance <- data %>% select(price, points) %>% na.omit()
+performance_scaled <- apply(performance,2,scale)
+set.seed(42)
+cbind(performance,
+      Cluster = kmeans(performance_scaled,3)$cluster) %>%
+  ggplot(aes(x = points, y=price, color=factor(Cluster))) +
+  geom_point() + scale_y_sqrt()
+```
+  
+Above gives us a great insight. There are 3 wines categories: 
+1-Cheap and good
+2-Cheap and not so good
+3-Expensive
+
+
+###Conclusion
+By investigating the wine reviews dataset, we have seen that price of a wine is highly correlated with the points that wine has in the review. Also, intuitively we can say that a wine which has a good review description should have higher points. Having this in mind, we did a sentiment analysis on the dataset and actually find good results that our sentiment analysis works. Also we did a linear regression to predict price values. Normally, using linear regression to predict target which must be positive is not a good idea. Because since linear regression does not have any bound, it can easily predict negative target values which does not makes sense. However, we have find a turnaround for this problem and use logarithm to avoid having negative predictions. One further improvement can be, using more appropriate model for this task. 
